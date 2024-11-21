@@ -1,9 +1,9 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
-import OpenAI from 'openai';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
+import fetch from 'node-fetch'; // 用于调用Claude的API
 
 dotenv.config();
 
@@ -32,13 +32,10 @@ app.use(express.json());
 // Serve static files from the dist directory
 app.use(express.static(join(__dirname, '../dist')));
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
-
 // 内存缓存上下文结构
 let conversationContext = [];
 
+// System content, 仅在新对话时添加
 // System content, 仅在新对话时添加
 const systemContent = [
   {
@@ -103,24 +100,34 @@ app.post('/chat', async (req, res) => {
       return res.status(400).json({ error: 'Message is required' });
     }
 
-    if (!process.env.OPENAI_API_KEY) {
-      return res.status(500).json({ error: 'OpenAI API key is not configured' });
+    if (!process.env.CLAUDE_API_KEY) {
+      return res.status(500).json({ error: 'Claude API key is not configured' });
     }
 
     // 添加用户消息到上下文
     conversationContext.push({ role: 'user', content: message });
 
-    const completion = await openai.chat.completions.create({
-      messages: conversationContext,
-      model: 'gpt-4o',
+    // 通过 Claude API 调用
+    const response = await fetch('https://api.anthropic.com/v1/claude/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.CLAUDE_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: 'claude-3-5-sonnet-20241022',
+        messages: conversationContext,
+      }),
     });
 
-    if (!completion.choices || completion.choices.length === 0) {
-      return res.status(500).json({ error: 'OpenAI 没有回复' });
+    const data = await response.json();
+
+    if (!data.choices || data.choices.length === 0) {
+      return res.status(500).json({ error: 'Claude 没有回复' });
     }
 
     // 获取回复并添加到上下文
-    const reply = completion.choices[0].message.content;
+    const reply = data.choices[0].message.content;
     conversationContext.push({ role: 'assistant', content: reply });
 
     res.json({ reply });
