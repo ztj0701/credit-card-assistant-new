@@ -118,7 +118,7 @@ app.post('/chat', async (req, res) => {
 
     const completion = await anthropic.messages.create({
       model: 'claude-3-5-sonnet-20241022',
-      max_tokens: 128000,
+      max_tokens: 4096,
       system: systemPrompt,
       messages: [
         ...messages,
