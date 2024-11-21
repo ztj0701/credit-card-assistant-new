@@ -3,16 +3,12 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
-import fetch from 'node-fetch'; // 用于调用Claude的API
+import fetch from 'node-fetch';
 
 dotenv.config();
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-
 const app = express();
 
-// Simplified CORS configuration since we're serving from same origin
 const allowedOrigins = ['https://credit-card-assistant-new.vercel.app'];
 
 const corsOptions = {
@@ -29,14 +25,9 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json());
 
-// Serve static files from the dist directory
-app.use(express.static(join(__dirname, '../dist')));
+// Serve static files
+app.use(express.static(join(dirname(fileURLToPath(import.meta.url)), '../dist')));
 
-// 内存缓存上下文结构
-let conversationContext = [];
-
-// System content, 仅在新对话时添加
-// System content, 仅在新对话时添加
 const systemContent = [
   {
     role: 'system',
@@ -88,10 +79,25 @@ const systemContent = [
   }
 ];
 
-// 初始化上下文为系统内容
-conversationContext = [...systemContent];
+// 创建会话管理类
+class ConversationManager {
+  constructor(maxContextLength = 20000) {
+    this.maxContextLength = maxContextLength;
+    this.systemContent = [
+      { role: 'system', content: systemContent },
+      // 可以在这里添加更多系统预设内容
+    ];
+  }
 
-// Chat endpoint
+  createContext(userMessage) {
+    const context = [
+      ...this.systemContent,
+      { role: 'user', content: userMessage }
+    ];
+    return context;
+  }
+}
+
 app.post('/chat', async (req, res) => {
   try {
     const { message } = req.body;
@@ -104,42 +110,43 @@ app.post('/chat', async (req, res) => {
       return res.status(500).json({ error: 'Claude API key is not configured' });
     }
 
-    // 添加用户消息到上下文
-    conversationContext.push({ role: 'user', content: message });
+    const conversationManager = new ConversationManager();
+    const messages = conversationManager.createContext(message);
 
-    // 通过 Claude API 调用
-    const response = await fetch('https://api.anthropic.com/v1/claude/chat/completions', {
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.CLAUDE_API_KEY}`,
+        'X-API-Key': process.env.CLAUDE_API_KEY,
+        'Anthropic-Version': '2023-06-01'
       },
       body: JSON.stringify({
         model: 'claude-3-5-sonnet-20241022',
-        messages: conversationContext,
+        max_tokens: 128000,
+        messages: messages
       }),
     });
 
     const data = await response.json();
 
-    if (!data.choices || data.choices.length === 0) {
-      return res.status(500).json({ error: 'Claude 没有回复' });
+    if (!response.ok) {
+      return res.status(response.status).json({ 
+        error: data.error?.message || 'Unknown API error' 
+      });
     }
 
-    // 获取回复并添加到上下文
-    const reply = data.choices[0].message.content;
-    conversationContext.push({ role: 'assistant', content: reply });
-
+    const reply = data.content[0].text;
     res.json({ reply });
+
   } catch (error) {
     console.error('Server Error:', error);
     res.status(500).json({ error: '服务器错误，请稍后重试' });
   }
 });
 
-// Handle all other routes by serving the index.html
+// 处理所有其他路由
 app.get('*', (req, res) => {
-  res.sendFile(join(__dirname, '../dist/index.html'));
+  res.sendFile(join(dirname(fileURLToPath(import.meta.url)), '../dist/index.html'));
 });
 
 const PORT = process.env.PORT || 8080;
