@@ -13,7 +13,7 @@ const __dirname = dirname(__filename);
 const app = express();
 
 // Simplified CORS configuration since we're serving from same origin
-const allowedOrigins = ['https://credit-card-assistant.vercel.app'];
+const allowedOrigins = ['https://credit-card-assistant-new.vercel.app'];
 
 const corsOptions = {
   origin: (origin, callback) => {
