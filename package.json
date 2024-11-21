@@ -17,7 +17,7 @@
     "express": "^4.18.3",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
-    "openai": "^4.28.4",
+    "@anthropic-ai/sdk": "^0.20.0",
     "axios": "^1.6.7"
   },
   "devDependencies": {
