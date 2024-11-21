@@ -1,14 +1,19 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import Anthropic from '@anthropic-ai/sdk';
 import { fileURLToPath } from 'url';
 import { dirname, join } from 'path';
 import fetch from 'node-fetch';
 
 dotenv.config();
 
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
+
 const app = express();
 
+// Simplified CORS configuration since we're serving from same origin
 const allowedOrigins = ['https://credit-card-assistant-new.vercel.app'];
 
 const corsOptions = {
@@ -25,9 +30,17 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json());
 
-// Serve static files
-app.use(express.static(join(dirname(fileURLToPath(import.meta.url)), '../dist')));
+// Serve static files from the dist directory
+app.use(express.static(join(__dirname, '../dist')));
 
+const anthropic = new Anthropic({
+  apiKey: process.env.ANTHROPIC_API_KEY,
+});
+
+// 内存缓存上下文结构
+let conversationContext = [];
+
+// System content, 仅在新对话时添加
 const systemContent = [
   {
     role: 'system',
@@ -76,28 +89,14 @@ const systemContent = [
   {
     "role": "system",
     "content": "信用卡名称: 工行黑白菜白金卡\n银行: 工商银行\n卡片等级: 万事达世界卡\n年费: 2000元/年\n免年费条件: 消费20万减免年费，部分地区特殊政策\n贵宾厅权益: 工行自营机场/高铁贵宾厅\n酒店权益: 星级酒店优惠，携程钻石会籍\n保险权益: 无\n消费返现: 境外消费返现1%\n购物优惠/返利: 购物积分\n其他特殊权益: 专属体检，部分城市无限次贵宾厅使用\n权益领取消费要求: 部分权益需消费达标\n办理条件 - 年龄: 无\n办理条件 - 收入/资产: 特殊地区客户\n办理条件 - 其他: 无\n申请方式: 线下申请\n备注: 适合高消费客户，尤其是经常出行的用户"
-  }
+  },
+  // 其他系统初始内容保持不变
 ];
 
-// 创建会话管理类
-class ConversationManager {
-  constructor(maxContextLength = 20000) {
-    this.maxContextLength = maxContextLength;
-    this.systemContent = [
-      { role: 'system', content: systemContent },
-      // 可以在这里添加更多系统预设内容
-    ];
-  }
+// 初始化上下文为系统内容
+conversationContext = [...systemContent];
 
-  createContext(userMessage) {
-    const context = [
-      ...this.systemContent,
-      { role: 'user', content: userMessage }
-    ];
-    return context;
-  }
-}
-
+// Chat endpoint
 app.post('/chat', async (req, res) => {
   try {
     const { message } = req.body;
@@ -106,47 +105,50 @@ app.post('/chat', async (req, res) => {
       return res.status(400).json({ error: 'Message is required' });
     }
 
-    if (!process.env.CLAUDE_API_KEY) {
-      return res.status(500).json({ error: 'Claude API key is not configured' });
+    if (!process.env.ANTHROPIC_API_KEY) {
+      return res.status(500).json({ error: 'Anthropic API key is not configured' });
     }
 
-    const conversationManager = new ConversationManager();
-    const messages = conversationManager.createContext(message);
+    // 将系统和历史消息转换为Claude API接受的格式
+    const messages = conversationContext
+      .filter(msg => msg.role !== 'system')
+      .map(msg => ({ role: msg.role, content: msg.content }));
+    
+    const systemPrompt = systemContent.map(s => s.content).join('\n\n');
 
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-API-Key': process.env.CLAUDE_API_KEY,
-        'Anthropic-Version': '2023-06-01'
-      },
-      body: JSON.stringify({
-        model: 'claude-3-5-sonnet-20241022',
-        max_tokens: 128000,
-        messages: messages
-      }),
+    const completion = await anthropic.messages.create({
+      model: 'claude-3-5-sonnet-20241022',
+      max_tokens: 128000,
+      system: systemPrompt,
+      messages: [
+        ...messages,
+        { role: 'user', content: message }
+      ]
     });
 
-    const data = await response.json();
-
-    if (!response.ok) {
-      return res.status(response.status).json({ 
-        error: data.error?.message || 'Unknown API error' 
-      });
+    if (!completion.content || completion.content.length === 0) {
+      return res.status(500).json({ error: 'Claude没有回复' });
     }
 
-    const reply = data.content[0].text;
-    res.json({ reply });
+    // 获取回复并解析内容
+    const reply = completion.content[0].text;
+    
+    // 手动管理上下文
+    conversationContext.push(
+      { role: 'user', content: message },
+      { role: 'assistant', content: reply }
+    );
 
+    res.json({ reply });
   } catch (error) {
     console.error('Server Error:', error);
     res.status(500).json({ error: '服务器错误，请稍后重试' });
   }
 });
 
-// 处理所有其他路由
+// Handle all other routes by serving the index.html
 app.get('*', (req, res) => {
-  res.sendFile(join(dirname(fileURLToPath(import.meta.url)), '../dist/index.html'));
+  res.sendFile(join(__dirname, '../dist/index.html'));
 });
 
 const PORT = process.env.PORT || 8080;
